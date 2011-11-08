@@ -1,0 +1,354 @@
+= Introduction
+
+This is an easy step-by-step demonstration of how to quickly set up a
+{Rails 3.1}[https://github.com/rails/rails/tree/3-1-stable] +
+Devise[https://github.com/plataformatec/devise] +
+CanCan[https://github.com/ryanb/cancan]
+environment.
+
+It was made during the meetup Paris.rb[http://www.meetup.com/parisrb/events/38333772/] on 8th November 2011.
+
+= Setting up
+
+== Rails 3.1
+
+Run in your terminal
+
+  gem install rails --version '~>3.1'
+  rails new demo-devise-cancan
+  cd demo-devise-cancan
+
+== Authentication with Devise
+
+Add into your Gemfile
+
+  gem 'devise'
+
+Then run in your terminal
+
+  bundle install
+
+Set up Devise for Rails
+
+  rails generate devise:install
+
+Create an User model using Devise
+
+  rails generate devise User
+
+Have a look on your your User model
+
+  class User < ActiveRecord::Base
+    # Include default devise modules. Others available are:
+    # :token_authenticatable, :encryptable, :confirmable, :lockable, :timeoutable and :omniauthable
+    devise :database_authenticatable, :registerable,
+           :recoverable, :rememberable, :trackable, :validatable
+
+    # Setup accessible (or protected) attributes for your model
+    attr_accessible :email, :password, :password_confirmation, :remember_me
+  end
+
+Devise brings many usefull functionalities for authentication. More details on Devise[https://github.com/plataformatec/devise] github page.
+
+Now, let's have a look on what Devise do on client-side.
+
+But first we have to delete index.html file in /public
+
+  rm public/index.html
+
+And we need to create a resource like an Article for example
+
+  rails generate scaffold Article title:string content:text
+
+Migrate your database
+
+  rake db:migrate
+
+Add in your routes.rb file this rule
+
+  root :to => 'articles#index'
+
+Your file should now looks like this
+
+  DemoDeviseCancan::Application.routes.draw do
+    resources :articles
+    devise_for :users
+    root :to => 'articles#index'
+  end
+
+Open a new terminal and lauch your server
+
+  rails server
+
+Then open your web browser and go to http://localhost:3000/ you should see an empty listing for articles. Cool, it works !
+But there is no user authentication, so let's add make your application more private by always requiring user authentication.
+
+Open your application's controller /app/controllers/application_controller.rb and add this line
+
+  before_filter :authenticate_user!
+
+It should looks like this
+
+  class ApplicationController < ActionController::Base
+    before_filter :authenticate_user!
+    protect_from_forgery
+  end
+
+Now refresh your browser and it should redirect you to a sign in form. Sign up and you should be signed in. Cool !
+
+It should be better if your default layout show us with wich user I am signed in.
+So add theses lines in your /app/views/layouts/application.html.erb between body tags
+
+  <% if user_signed_in? %>
+    Hi, you are signed in with <%= current_user.email %> |
+    <%= link_to "Sign out", destroy_user_session_path, :method => :delete %>
+  <% end %>
+
+Refresh your web browser, you can now show your email address !
+
+Devise it's perfectly implemented into your app. Cool !
+But, as you can see, anybody who is signed in can edit an article your created.
+This is why we will implement now CanCan.
+
+== Authorization with CanCan
+
+Add into your Gemfile
+
+  gem 'cancan'
+
+Then run in your terminal
+
+  bundle install
+
+Set up CanCan for Rails
+
+  rails generate cancan:ability
+
+It should create a new model app/models/ability.rb where all permissions will be setting up
+
+But first of all, we need to manage user with your articles
+
+Generate a new migration
+
+  rails generate migration AddUserOnArticles
+
+Open the file that has just been created at /db/migrate/201111XXXXXXXX_add_user_on_articles.rb
+
+Add add the column. Your file should looks like this
+
+  class AddUserOnArticles < ActiveRecord::Migration
+    def up
+      add_column :articles, :user_id, :reference
+    end
+
+    def down
+    end
+  end
+
+Migrate your database
+
+  rake db:migrate
+
+Add into your article model this line
+
+  belongs_to :user
+
+Let's edit your articles controller /app/controllers/articles_controller.rb to save the user everytime an article is both created or updated
+
+Your method create should looks like this
+
+  def create
+    @article = Article.new(params[:article])
+    @article.user = current_user
+
+    respond_to do |format|
+      if @article.save
+        format.html { redirect_to @article, notice: 'Article was successfully created.' }
+        format.json { render json: @article, status: :created, location: @article }
+      else
+        format.html { render action: "new" }
+        format.json { render json: @article.errors, status: :unprocessable_entity }
+      end
+    end
+  end
+
+And your method update like this
+
+  def update
+    @article = Article.find(params[:id])
+    @article.user = current_user
+
+    respond_to do |format|
+      if @article.update_attributes(params[:article])
+        format.html { redirect_to @article, notice: 'Article was successfully updated.' }
+        format.json { head :ok }
+      else
+        format.html { render action: "edit" }
+        format.json { render json: @article.errors, status: :unprocessable_entity }
+      end
+    end
+  end
+
+Let's say to your articles controller to check permissions on each action, by adding this line at the top of the controller
+
+  load_and_authorize_resource
+
+Restart your server (because we have ran bundle install),
+and refresh your browser to http://localhost:3000/articles you should not be able to access to this page.
+Great that means it works !
+
+So let's now customize your ability model /app/models/ability.rb
+and say every user can read and create articles but can only update and destroy his own article
+
+Your ability file should looks like this
+
+  class Ability
+    include CanCan::Ability
+
+    def initialize(user)
+      user ||= User.new # guest user (not logged in)
+
+      if user.persisted?
+        can :read, Article
+        can :manage, Article, :user_id => user.id
+      else
+        # Guest user are not allowed
+      end
+
+    end
+  end
+
+More details about CanCan ability on https://github.com/ryanb/cancan/wiki/Defining-Abilities
+
+Update your views to show the owner of an article
+
+/app/views/articles/index.html.erb should looks like this
+
+  <h1>Listing articles</h1>
+
+  <table>
+    <tr>
+      <th>Title</th>
+      <th>Content</th>
+      <th>Owner</th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+
+  <% @articles.each do |article| %>
+    <tr>
+      <td><%= article.title %></td>
+      <td><%= article.content %></td>
+      <td><%= article.user.email %></td>
+      <td><%= link_to 'Show', article %></td>
+      <td><%= link_to 'Edit', edit_article_path(article) %></td>
+      <td><%= link_to 'Destroy', article, confirm: 'Are you sure?', method: :delete %></td>
+    </tr>
+  <% end %>
+  </table>
+
+  <br />
+
+  <%= link_to 'New Article', new_article_path %>
+
+/app/views/articles/show.html.erb should looks like this
+
+  <p id="notice"><%= notice %></p>
+
+  <p>
+    <b>Title:</b>
+    <%= @article.title %>
+  </p>
+
+  <p>
+    <b>Owner:</b>
+    <%= @article.user.email %>
+  </p>
+
+  <p>
+    <b>Content:</b>
+    <%= @article.content %>
+  </p>
+
+  <%= link_to 'Edit', edit_article_path(@article) %> |
+  <%= link_to 'Back', articles_path %>
+
+Note: If you have created some articles before we add the "article belongs to user" functionality,
+I suggest you to reset your database by running
+
+  rake db:reset
+
+Refresh your browser, create and article, sign in with an another user and try to edit an article, CanCan should denied you ! Cool !
+
+Now let's make your views a bit prettier by hiding links if an user have no access on it.
+
+In /app/views/articles/index.html.erb lets hide edit and destroy. Your file should looks like this
+
+  <h1>Listing articles</h1>
+
+  <table>
+    <tr>
+      <th>Title</th>
+      <th>Content</th>
+      <th>Owner</th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+
+  <% @articles.each do |article| %>
+    <tr>
+      <td><%= article.title %></td>
+      <td><%= article.content %></td>
+      <td><%= article.user.email %></td>
+      <td><%= link_to 'Show', article %></td>
+      <td>
+        <% if can? :edit, article %>
+          <%= link_to 'Edit', edit_article_path(article) %>
+        <% end %>
+      </td>
+      <td>
+        <% if can? :destroy, article %>
+          <%= link_to 'Destroy', article, confirm: 'Are you sure?', method: :delete %>
+        <% end %>
+      </td>
+    </tr>
+  <% end %>
+  </table>
+
+  <br />
+
+  <%= link_to 'New Article', new_article_path %>
+
+Hide it too in /app/views/articles/show.html.erb. Your file should looks like this
+
+  <p id="notice"><%= notice %></p>
+
+  <p>
+    <b>Title:</b>
+    <%= @article.title %>
+  </p>
+
+  <p>
+    <b>Owner:</b>
+    <%= @article.user.email %>
+  </p>
+
+  <p>
+    <b>Content:</b>
+    <%= @article.content %>
+  </p>
+
+  <% if can? :edit, Article %>
+    <%= link_to 'Edit', edit_article_path(@article) %> |
+  <% end %>
+  <%= link_to 'Back', articles_path %>
+
+Refresh your navigator, sign in with a different user, magic !, edit and destroy links are hidden.
+
+Cool ! Devise and CanCan are perfectly implemented and works well !
+
+= Questions ?
+
+Create a new issue or {Send me a message}[https://github.com/inbox/new/Nebj]
